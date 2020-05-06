@@ -1,0 +1,27 @@
+{
+  "extends": "@sourcegraph/tsconfig",
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "inlineSourceMap": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "plugins": [
+      {
+        "name": "ts-graphql-plugin",
+        "tag": "gql",
+        "schema": {
+          "http": {
+            "url": "https://sourcegraph.com/.api/graphql",
+          },
+        },
+      },
+    ],
+  },
+  "include": ["src/**/*"],
+}
