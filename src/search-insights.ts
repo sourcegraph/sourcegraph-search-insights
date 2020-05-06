@@ -128,6 +128,17 @@ export function activate(context: sourcegraph.ExtensionContext): void {
                         )
                         console.log(searchResults)
 
+                        const data = sortBy(
+                            Object.entries(searchResults).map(
+                                ([name, result]) => [+name.slice('search'.length), result] as const
+                            ),
+                            0
+                        ).map(([i, result]) => {
+                            const date = dates[i]
+                            const count = result.stats.approximateResultCount
+                            return { date, count }
+                        })
+
                         return {
                             title: insight.title,
                             content: [
@@ -136,17 +147,7 @@ export function activate(context: sourcegraph.ExtensionContext): void {
                                     value: [
                                         '| Day | Results |',
                                         '|--|--|',
-                                        ...sortBy(
-                                            Object.entries(searchResults).map(
-                                                ([name, result]) => [+name.slice('search'.length), result] as const
-                                            ),
-                                            0
-                                        ).map(([i, result]) => {
-                                            console.log({ i, result })
-                                            const date = dates[i]
-                                            const count = result.stats.approximateResultCount
-                                            return `| ${date.toLocaleDateString()} | ${count} |`
-                                        }),
+                                        ...data.map(({ date, count }) => `| ${date.toLocaleDateString()} | ${count} |`),
                                         '',
                                     ].join('\n'),
                                 },
