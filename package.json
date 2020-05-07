@@ -18,38 +18,94 @@
     "configuration": {
       "patternProperties": {
         "^searchInsights\\.insight\\.": {
-          "type": "object",
-          "properties": {
-            "title": {
-              "type": "string"
+          "anyOf": [
+            {
+              "enum": [
+                "null",
+                "false"
+              ]
             },
-            "query": {
-              "type": "string",
-              "description": "The search query, without the repo filter."
-            },
-            "repositories": {
-              "default": "current",
-              "description": "The repositories to query. Can be \"current\" to query only the current repository (default), \"all\" to query all repositories, or a list of regular expression patterns.",
-              "oneOf": [
-                {
-                  "enum": [
-                    "current",
-                    "all"
-                  ]
+            {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
                 },
-                {
+                "description": {
+                  "type": "string"
+                },
+                "series": {
+                  "description": "Each query will be represented by one line on the chart.",
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "format": "regex"
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "query": {
+                        "description": "The search query, without the repo filter.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "query"
+                    ]
+                  }
+                },
+                "repositories": {
+                  "default": "current",
+                  "description": "The repositories to query. Can be \"current\" to query only the current repository (default), \"all\" to query all repositories, or a list of regular expression patterns.",
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "current",
+                        "all"
+                      ]
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "regex"
+                      }
+                    }
+                  ]
+                },
+                "step": {
+                  "description": "The time duration between two data points on the X axis.",
+                  "type": "object",
+                  "properties": {
+                    "years": {
+                      "type": "number"
+                    },
+                    "months": {
+                      "type": "number"
+                    },
+                    "weeks": {
+                      "type": "number"
+                    },
+                    "days": {
+                      "type": "number"
+                    },
+                    "hours": {
+                      "type": "number"
+                    },
+                    "minutes": {
+                      "type": "number"
+                    },
+                    "seconds": {
+                      "type": "number"
+                    }
                   }
                 }
+              },
+              "required": [
+                "queries",
+                "title"
               ]
             }
-          },
-          "required": [
-            "query",
-            "title"
           ]
         }
       }

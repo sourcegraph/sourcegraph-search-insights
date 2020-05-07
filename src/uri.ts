@@ -27,3 +27,13 @@ export function resolveRootURI(uri: URL): ResolvedRootURI {
     }
     return { repo, rev }
 }
+
+/**
+ * Resolve a URI of the form git://github.com/owner/repo?rev#path to an absolute reference.
+ */
+export function resolveDocumentURI(uri: URL): ResolvedDocumentURI {
+    return {
+        ...resolveRootURI(uri),
+        path: uri.hash.slice(1),
+    }
+}
