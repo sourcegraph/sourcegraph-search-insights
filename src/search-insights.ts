@@ -140,7 +140,7 @@ function createViewProvider(insight: Insight): sourcegraph.ViewProvider {
                     {
                         chart: 'line' as const,
                         data,
-                        lines: insight.series.map(query => ({
+                        series: insight.series.map(query => ({
                             dataKey: query.name,
                             name: query.name,
                             stroke: 'var(--warning)',
