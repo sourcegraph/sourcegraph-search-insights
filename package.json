@@ -28,11 +28,16 @@
             },
             {
               "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "series"
+              ],
               "properties": {
                 "title": {
                   "type": "string"
                 },
-                "description": {
+                "subtitle": {
                   "type": "string"
                 },
                 "series": {
@@ -40,12 +45,17 @@
                   "type": "array",
                   "items": {
                     "type": "object",
+                    "additionalProperties": false,
                     "properties": {
                       "name": {
                         "type": "string"
                       },
                       "query": {
                         "description": "The search query, without the repo filter.",
+                        "type": "string"
+                      },
+                      "stroke": {
+                        "description": "The color of the line for the series.",
                         "type": "string"
                       }
                     },
@@ -101,11 +111,7 @@
                     }
                   }
                 }
-              },
-              "required": [
-                "queries",
-                "title"
-              ]
+              }
             }
           ]
         }

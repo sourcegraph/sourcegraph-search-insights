@@ -2,11 +2,10 @@ import * as sourcegraph from 'sourcegraph'
 import gql from 'tagged-template-noop'
 import { IQuery, IGraphQLResponseRoot, ISearch, ICommitSearchResult } from './graphql-schema'
 import { resolveDocumentURI } from './uri'
-import { sub, add, Duration, startOfDay } from 'date-fns'
+import { sub, Duration, startOfDay, isAfter, formatISO } from 'date-fns'
 import { from, defer } from 'rxjs'
 import { map, distinctUntilChanged, mergeAll, startWith, retry } from 'rxjs/operators'
 import isEqual from 'lodash/isEqual'
-import sortBy from 'lodash/sortBy'
 import escapeRegExp from 'lodash/escapeRegExp'
 
 const queryGraphQL = async <T = IQuery>(query: string, variables: object = {}): Promise<T> => {
@@ -23,10 +22,12 @@ const queryGraphQL = async <T = IQuery>(query: string, variables: object = {}): 
 
 interface Insight {
     title: string
+    subtitle?: string
     description?: string
     series: {
         name: string
         query: string
+        stroke?: string
     }[]
     step: Duration
     repositories?: 'current' | 'all' | string[]
@@ -87,7 +88,7 @@ function createViewProvider(insight: Insight): sourcegraph.ViewProvider {
             }
 
             // Get commits to search for each day
-            const commitOids = await determineCommitsToSearch(dates, step, repoRegexp)
+            const commitOids = await determineCommitsToSearch(dates, repoRegexp)
             const searchQueries = insight.series.flatMap(({ query }) =>
                 commitOids.map(oid =>
                     [`repo:${repoRegexp}@${oid}`, pathRegexp && ` file:${pathRegexp}`, query, 'count:99999']
@@ -133,23 +134,24 @@ function createViewProvider(insight: Insight): sourcegraph.ViewProvider {
             }
             return {
                 title: insight.title,
+                subtitle: insight.subtitle,
                 content: [
-                    ...(insight.description
-                        ? [{ kind: sourcegraph.MarkupKind.Markdown, value: insight.description }]
-                        : []),
                     {
                         chart: 'line' as const,
                         data,
-                        series: insight.series.map(query => ({
-                            dataKey: query.name,
-                            name: query.name,
-                            stroke: 'var(--warning)',
+                        series: insight.series.map(series => ({
+                            dataKey: series.name,
+                            name: series.name,
+                            stroke: series.stroke,
                             linkURLs: dates.map(date => {
                                 // Link to diff search that explains what new cases were added between two data points
                                 const url = new URL('/search', sourcegraph.internal.sourcegraphURL)
-                                const after = sub(date, step).toISOString()
-                                const before = date.toISOString()
-                                const diffQuery = `type:diff after:${after} before:${before} ${query.query}`
+                                // Use formatISO instead of toISOString(), because toISOString() always outputs UTC.
+                                // They mark the same point in time, but using the user's timezone makes the date string
+                                // easier to read (else the date component may be off by one day)
+                                const after = formatISO(sub(date, step))
+                                const before = formatISO(date)
+                                const diffQuery = `repo:${repoRegexp} type:diff after:${after} before:${before} ${series.query}`
                                 url.searchParams.set('q', diffQuery)
                                 return url.href
                             }),
@@ -166,15 +168,10 @@ function createViewProvider(insight: Insight): sourcegraph.ViewProvider {
     }
 }
 
-async function determineCommitsToSearch(
-    dates: Date[],
-    step: globalThis.Duration,
-    repoRegexp: string
-): Promise<string[]> {
+async function determineCommitsToSearch(dates: Date[], repoRegexp: string): Promise<string[]> {
     const commitQueries = dates.map(date => {
-        const before = add(date, step).toISOString()
-        const after = date.toISOString()
-        return `repo:${repoRegexp} type:commit before:${before} after:${after} count:1`
+        const before = formatISO(date)
+        return `repo:${repoRegexp} type:commit before:${before} count:1`
     })
     console.log('searching commits', commitQueries)
     const commitResults = await queryGraphQL<Record<string, ISearch>>(
@@ -189,6 +186,9 @@ async function determineCommitsToSearch(
                                         ... on CommitSearchResult {
                                             commit {
                                                 oid
+                                                committer {
+                                                    date
+                                                }
                                             }
                                         }
                                     }
@@ -201,14 +201,32 @@ async function determineCommitsToSearch(
         `,
         Object.fromEntries(commitQueries.map((query, i) => [`query${i}`, query]))
     )
-    const commitOids = sortBy(
-        Object.entries(commitResults).map(([name, result]) => [+name.slice('search'.length), result] as const),
-        0
-    ).map(([i, search]) => {
+    const commitOids = Object.entries(commitResults).map(([name, search], index) => {
+        const i = +name.slice('search'.length)
+        if (i !== index) {
+            throw new Error(`Expected field ${name} to be at index ${i} of object keys`)
+        }
+
         if (search.results.results.length === 0) {
             throw new Error(`No result for ${commitQueries[i]}`)
         }
-        return (search.results.results[0] as ICommitSearchResult).commit.oid
+        const commit = (search.results.results[0] as ICommitSearchResult).commit
+
+        // Sanity check
+        const commitDate = commit.committer && new Date(commit.committer.date)
+        const date = dates[i]
+        if (!commitDate) {
+            throw new Error(`Expected commit to have committer: \`${commit.oid}\``)
+        }
+        if (isAfter(commitDate, date)) {
+            throw new Error(
+                `Expected commit \`${commit.oid}\` to be before ${formatISO(date)}, but was after: ${formatISO(
+                    commitDate
+                )}.\nSearch query: ${commitQueries[i]}`
+            )
+        }
+
+        return commit.oid
     })
 
     return commitOids
