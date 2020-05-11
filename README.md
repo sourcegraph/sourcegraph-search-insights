@@ -1,4 +1,4 @@
-Provides interactive code insights on Sourcegraph directory pages from configurable code searches.
+Provides interactive code insights on Sourcegraph directory pages from configurable [code searches](https://docs.sourcegraph.com/user/search).
 The insight shows the development of the number of matches over time for a configurable time frame up to now.
 Each data point links to a [diff search](https://docs.sourcegraph.com/user/search#commit-diff-search) between that data point and the previous to explain the changes between the two datapoints.
 
