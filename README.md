@@ -2,11 +2,13 @@ Provides interactive code insights on Sourcegraph directory pages from configura
 The insight shows the development of the number of matches over time for a configurable time frame up to now.
 Each data point links to a [diff search](https://docs.sourcegraph.com/user/search#commit-diff-search) between that data point and the previous to explain the changes between the two datapoints.
 
+<p>
 <picture>
 <source srcset="https://user-images.githubusercontent.com/10532611/81548701-f80cb980-937d-11ea-99c6-4ef2d0c0278e.gif" media="(prefers-color-scheme: dark)" />
 <source srcset="https://user-images.githubusercontent.com/10532611/81548695-f642f600-937d-11ea-8e22-6f809a861b5d.gif" media="(prefers-color-scheme: light)" />
 <img src="https://user-images.githubusercontent.com/10532611/81548701-f80cb980-937d-11ea-99c6-4ef2d0c0278e.gif" alt="Screenshot" />
 </picture>
+</p>
 
 ## Configuration
 
