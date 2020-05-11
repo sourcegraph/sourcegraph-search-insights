@@ -6,7 +6,7 @@ Each data point links to a [diff search](https://docs.sourcegraph.com/user/searc
 
 To add a search insight, add an object like this to your user, organization or global settings:
 
-```json
+```jsonc
 // Choose any name - only the prefix "searchInsights.insight." is mandatory.
 "searchInsights.insight.reactFunctionComponentMigration": {
   // Shown as the title of the insight.
