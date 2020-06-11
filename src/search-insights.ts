@@ -54,124 +54,168 @@ export function activate(context: sourcegraph.ExtensionContext): void {
             if (!insight) {
                 return
             }
-            console.log('Registering search insights provider', id)
+            const { repositories } = insight
+            const viewProviderId = `searchInsights.${id}`
             // TODO diff and unregister removed insights
-            context.subscriptions.add(
-                sourcegraph.app.registerViewProvider(`searchInsights.${id}`, createViewProvider(insight))
-            )
+            if (repositories === 'current') {
+                context.subscriptions.add(
+                    sourcegraph.app.registerViewProvider(`${viewProviderId}.directory`, {
+                        where: 'directory',
+                        provideView: async ({ viewer }) => {
+                            const { repo, path } = resolveDocumentURI(viewer.directory.uri)
+                            return getInsightContent([repo], path, insight)
+                        },
+                    })
+                )
+            } else if (Array.isArray(repositories)) {
+                const provideView = (): Promise<sourcegraph.View> => getInsightContent(repositories, undefined, insight)
+                context.subscriptions.add(
+                    sourcegraph.app.registerViewProvider(`${viewProviderId}.directory`, {
+                        where: 'directory',
+                        provideView,
+                    })
+                )
+                context.subscriptions.add(
+                    sourcegraph.app.registerViewProvider(`${viewProviderId}.homepage`, {
+                        where: 'homepage',
+                        provideView,
+                    })
+                )
+                context.subscriptions.add(
+                    sourcegraph.app.registerViewProvider(`${viewProviderId}.insightsPage`, {
+                        where: 'insightsPage',
+                        provideView,
+                    })
+                )
+            }
         })
     )
 }
 
-function createViewProvider(insight: Insight): sourcegraph.ViewProvider {
+async function getInsightContent(
+    repos: string[],
+    path: string | undefined,
+    insight: Insight
+): Promise<sourcegraph.View> {
     const step = insight.step || { days: 1 }
+    const dates = getDaysToQuery(step)
+
+    const pathRegexp = path ? `^${escapeRegExp(path)}/` : undefined
+
+    // Get commits to search for each day
+    const repoCommits = (
+        await Promise.all(
+            repos.map(async repo => (await determineCommitsToSearch(dates, repo)).map(commit => ({ repo, ...commit })))
+        )
+    ).flat()
+    const searchQueries = insight.series.flatMap(({ query, name }) =>
+        repoCommits.map(({ date, repo, commit }) => ({
+            name,
+            date,
+            repo,
+            commit,
+            query: [`repo:^${escapeRegExp(repo)}$@${commit}`, pathRegexp && ` file:${pathRegexp}`, query, 'count:99999']
+                .filter(Boolean)
+                .join(' '),
+        }))
+    )
+    const rawSearchResults = await defer(() =>
+        queryGraphQL<Record<string, ISearch>>(
+            gql`
+                query BulkSearch(${searchQueries.map((_, i) => `$query${i}: String!`).join(', ')}) {
+                    ${searchQueries
+                        .map(
+                            (_, i) => gql`
+                                search${i}: search(version: V2, query: $query${i}) {
+                                    results {
+                                        matchCount
+                                    }
+                                }
+                            `
+                        )
+                        .join('\n')}
+                }
+            `,
+            Object.fromEntries(searchQueries.map(({ query }, i) => [`query${i}`, query]))
+        )
+    )
+        // The bulk search may timeout, but a retry is then likely faster because caches are warm
+        .pipe(retry(3))
+        .toPromise()
+    const searchResults = Object.entries(rawSearchResults).map(([field, result]) => {
+        const index = +field.slice('search'.length)
+        const query = searchQueries[index]
+        return { ...query, result }
+    })
+
+    const data: {
+        date: number
+        [seriesName: string]: number
+    }[] = []
+    for (const { name, date, result } of searchResults) {
+        const dataKey = name
+        const dataIndex = dates.indexOf(date)
+        const obj =
+            data[dataIndex] ??
+            (data[dataIndex] = {
+                date: date.getTime(),
+                // Initialize all series to 0
+                ...Object.fromEntries(insight.series.map(series => [series.name, 0])),
+            })
+        // Sum across repos
+        const countForRepo = result.results.matchCount
+        obj[dataKey] += countForRepo
+    }
 
     return {
-        where: 'directory',
-        provideView: async ({ viewer }) => {
-            // TODO support configuration of repositories
-            // Currently only searches current repo
-            if (insight.repositories) {
-                throw new Error('Configuration of repositories is not supported yet.')
-            }
-
-            const { repo, path } = resolveDocumentURI(viewer.directory.uri)
-            const repoRegexp = `^${escapeRegExp(repo)}$`
-            const pathRegexp = path ? `^${escapeRegExp(path)}/` : undefined
-
-            // Get days to query
-            const now = startOfDay(new Date())
-            const dates: Date[] = []
-            for (let i = 0, d = now; i < 7; i++) {
-                dates.unshift(d)
-                d = sub(d, step)
-            }
-
-            // Get commits to search for each day
-            const commitOids = await determineCommitsToSearch(dates, repoRegexp)
-            const searchQueries = insight.series.flatMap(({ query }) =>
-                commitOids.map(oid =>
-                    [`repo:${repoRegexp}@${oid}`, pathRegexp && ` file:${pathRegexp}`, query, 'count:99999']
-                        .filter(Boolean)
-                        .join(' ')
-                )
-            )
-            const searchResults = await defer(() =>
-                queryGraphQL<Record<string, ISearch>>(
-                    gql`
-                        query BulkSearch(${searchQueries.map((_, i) => `$query${i}: String!`).join(', ')}) {
-                            ${searchQueries
-                                .map(
-                                    (_, i) => gql`
-                                        search${i}: search(version: V2, query: $query${i}) {
-                                            results {
-                                                matchCount
-                                            }
-                                        }
-                                    `
-                                )
-                                .join('\n')}
-                        }
-                    `,
-                    Object.fromEntries(searchQueries.map((query, i) => [`query${i}`, query]))
-                )
-            )
-                // The bulk search may timeout, but a retry is then likely faster because caches are warm
-                .pipe(retry(3))
-                .toPromise()
-
-            const data: {
-                date: number
-                [seriesName: string]: number
-            }[] = []
-            for (const [field, result] of Object.entries(searchResults)) {
-                const i = +field.slice('search'.length)
-                const date = dates[i % dates.length]
-                const dataKey = insight.series[Math.floor(i / dates.length)].name
-                const obj = data[i % dates.length] ?? (data[i % dates.length] = { date: date.getTime() })
-                const count = result.results.matchCount
-                obj[dataKey] = count
-            }
-            return {
-                title: insight.title,
-                subtitle: insight.subtitle,
-                content: [
-                    {
-                        chart: 'line' as const,
-                        data,
-                        series: insight.series.map(series => ({
-                            dataKey: series.name,
-                            name: series.name,
-                            stroke: series.stroke,
-                            linkURLs: dates.map(date => {
-                                // Link to diff search that explains what new cases were added between two data points
-                                const url = new URL('/search', sourcegraph.internal.sourcegraphURL)
-                                // Use formatISO instead of toISOString(), because toISOString() always outputs UTC.
-                                // They mark the same point in time, but using the user's timezone makes the date string
-                                // easier to read (else the date component may be off by one day)
-                                const after = formatISO(sub(date, step))
-                                const before = formatISO(date)
-                                const diffQuery = `repo:${repoRegexp} type:diff after:${after} before:${before} ${series.query}`
-                                url.searchParams.set('q', diffQuery)
-                                return url.href
-                            }),
-                        })),
-                        xAxis: {
-                            dataKey: 'date' as const,
-                            type: 'number' as const,
-                            scale: 'time' as const,
-                        },
-                    },
-                ],
-            }
-        },
+        title: insight.title,
+        subtitle: insight.subtitle,
+        content: [
+            {
+                chart: 'line' as const,
+                data,
+                series: insight.series.map(series => ({
+                    dataKey: series.name,
+                    name: series.name,
+                    stroke: series.stroke,
+                    linkURLs: dates.map(date => {
+                        // Link to diff search that explains what new cases were added between two data points
+                        const url = new URL('/search', sourcegraph.internal.sourcegraphURL)
+                        // Use formatISO instead of toISOString(), because toISOString() always outputs UTC.
+                        // They mark the same point in time, but using the user's timezone makes the date string
+                        // easier to read (else the date component may be off by one day)
+                        const after = formatISO(sub(date, step))
+                        const before = formatISO(date)
+                        const repoFilters = repos.map(repo => `repo:^${escapeRegExp(repo)}$`).join(' ')
+                        const diffQuery = `${repoFilters} type:diff after:${after} before:${before} ${series.query}`
+                        url.searchParams.set('q', diffQuery)
+                        return url.href
+                    }),
+                })),
+                xAxis: {
+                    dataKey: 'date' as const,
+                    type: 'number' as const,
+                    scale: 'time' as const,
+                },
+            },
+        ],
     }
 }
 
-async function determineCommitsToSearch(dates: Date[], repoRegexp: string): Promise<string[]> {
+function getDaysToQuery(step: globalThis.Duration): Date[] {
+    const now = startOfDay(new Date())
+    const dates: Date[] = []
+    for (let i = 0, d = now; i < 7; i++) {
+        dates.unshift(d)
+        d = sub(d, step)
+    }
+    return dates
+}
+
+async function determineCommitsToSearch(dates: Date[], repo: string): Promise<{ date: Date; commit: string }[]> {
     const commitQueries = dates.map(date => {
         const before = formatISO(date)
-        return `repo:${repoRegexp} type:commit before:${before} count:1`
+        return `repo:^${escapeRegExp(repo)}$ type:commit before:${before} count:1`
     })
     console.log('searching commits', commitQueries)
     const commitResults = await queryGraphQL<Record<string, ISearch>>(
@@ -226,7 +270,7 @@ async function determineCommitsToSearch(dates: Date[], repoRegexp: string): Prom
             )
         }
 
-        return commit.oid
+        return { commit: commit.oid, date }
     })
 
     return commitOids
