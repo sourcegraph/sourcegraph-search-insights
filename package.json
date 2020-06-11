@@ -12,7 +12,10 @@
     "*"
   ],
   "wip": true,
-  "categories": [],
+  "categories": [
+    "Reports and stats",
+    "Insights"
+  ],
   "tags": [],
   "contributes": {
     "actions": [],
