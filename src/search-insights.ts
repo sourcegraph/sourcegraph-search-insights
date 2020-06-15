@@ -54,7 +54,7 @@ export function activate(context: sourcegraph.ExtensionContext): void {
             if (!insight) {
                 return
             }
-            const { repositories } = insight
+            const { repositories = 'current' } = insight
             const viewProviderId = `searchInsights.${id}`
             // TODO diff and unregister removed insights
             if (repositories === 'current') {
