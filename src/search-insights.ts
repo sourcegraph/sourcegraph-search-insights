@@ -55,11 +55,11 @@ export function activate(context: sourcegraph.ExtensionContext): void {
                 return
             }
             const { repositories = 'current' } = insight
-            const viewProviderId = `searchInsights.${id}`
+
             // TODO diff and unregister removed insights
             if (repositories === 'current') {
                 context.subscriptions.add(
-                    sourcegraph.app.registerViewProvider(`${viewProviderId}.directory`, {
+                    sourcegraph.app.registerViewProvider(`${id}.directory`, {
                         where: 'directory',
                         provideView: async ({ viewer }) => {
                             const { repo, path } = resolveDocumentURI(viewer.directory.uri)
@@ -70,19 +70,19 @@ export function activate(context: sourcegraph.ExtensionContext): void {
             } else if (Array.isArray(repositories)) {
                 const provideView = (): Promise<sourcegraph.View> => getInsightContent(repositories, undefined, insight)
                 context.subscriptions.add(
-                    sourcegraph.app.registerViewProvider(`${viewProviderId}.directory`, {
+                    sourcegraph.app.registerViewProvider(`${id}.directory`, {
                         where: 'directory',
                         provideView,
                     })
                 )
                 context.subscriptions.add(
-                    sourcegraph.app.registerViewProvider(`${viewProviderId}.homepage`, {
+                    sourcegraph.app.registerViewProvider(`${id}.homepage`, {
                         where: 'homepage',
                         provideView,
                     })
                 )
                 context.subscriptions.add(
-                    sourcegraph.app.registerViewProvider(`${viewProviderId}.insightsPage`, {
+                    sourcegraph.app.registerViewProvider(`${id}.insightsPage`, {
                         where: 'insightsPage',
                         provideView,
                     })
