@@ -17,8 +17,13 @@ const queryGraphQL = async <T = IQuery>(query: string, variables: object = {}): 
     if (errors && errors.length > 0) {
         throw new Error(errors.map(e => e.message).join('\n'))
     }
-    return (data as any) as T
+    return data as any as T
 }
+
+/**
+ * Special empty data point value for line chart.
+ */
+const EMPTY_DATA_POINT_VALUE = null
 
 interface Insight {
     title: string
@@ -56,56 +61,70 @@ export function activate(context: sourcegraph.ExtensionContext): void {
     let previousSubscriptions = new Subscription()
 
     context.subscriptions.add(
-        insightChanges.pipe(
-            tap(() => {
-                previousSubscriptions.unsubscribe()
-                previousSubscriptions = new Subscription()
-                context.subscriptions.add(previousSubscriptions)
-            }),
-            mergeAll()
-        ).subscribe(([id, insight]) => {
-            if (!insight) {
-                return
-            }
-            const { repositories = 'current' } = insight
+        insightChanges
+            .pipe(
+                tap(() => {
+                    previousSubscriptions.unsubscribe()
+                    previousSubscriptions = new Subscription()
+                    context.subscriptions.add(previousSubscriptions)
+                }),
+                mergeAll()
+            )
+            .subscribe(([id, insight]) => {
+                if (!insight) {
+                    return
+                }
+                const { repositories = 'current' } = insight
 
-            // TODO diff and unregister removed insights
-            if (repositories === 'current') {
-                context.subscriptions.add(
-                    sourcegraph.app.registerViewProvider(`${id}.directory`, {
+                // TODO diff and unregister removed insights
+                if (repositories === 'current') {
+                    context.subscriptions.add(
+                        sourcegraph.app.registerViewProvider(`${id}.directory`, {
+                            where: 'directory',
+                            provideView: async ({ viewer }) => {
+                                const { repo, path } = resolveDocumentURI(viewer.directory.uri)
+                                return getInsightContent([repo], path, insight)
+                            },
+                        })
+                    )
+                } else if (Array.isArray(repositories)) {
+                    const provideView = (): Promise<sourcegraph.View> =>
+                        getInsightContent(repositories, undefined, insight)
+
+                    const directoryPageProvider = sourcegraph.app.registerViewProvider(`${id}.directory`, {
                         where: 'directory',
-                        provideView: async ({ viewer }) => {
-                            const { repo, path } = resolveDocumentURI(viewer.directory.uri)
-                            return getInsightContent([repo], path, insight)
-                        },
+                        provideView,
                     })
-                )
-            } else if (Array.isArray(repositories)) {
-                const provideView = (): Promise<sourcegraph.View> => getInsightContent(repositories, undefined, insight)
 
-                const directoryPageProvider = sourcegraph.app.registerViewProvider(`${id}.directory`, {
-                    where: 'directory',
-                    provideView,
-                })
+                    const homePageProvider = sourcegraph.app.registerViewProvider(`${id}.homepage`, {
+                        where: 'homepage',
+                        provideView,
+                    })
 
-                const homePageProvider = sourcegraph.app.registerViewProvider(`${id}.homepage`, {
-                    where: 'homepage',
-                    provideView,
-                })
+                    const insightPageProvider = sourcegraph.app.registerViewProvider(`${id}.insightsPage`, {
+                        where: 'insightsPage',
+                        provideView,
+                    })
 
-                const insightPageProvider = sourcegraph.app.registerViewProvider(`${id}.insightsPage`, {
-                    where: 'insightsPage',
-                    provideView,
-                })
-
-                // Pass next providers to enclosure subscription bag in case if we got update
-                // from the user/org settings in order for us to be able to close provider observables.
-                previousSubscriptions.add(insightPageProvider)
-                previousSubscriptions.add(directoryPageProvider)
-                previousSubscriptions.add(homePageProvider)
-            }
-        })
+                    // Pass next providers to enclosure subscription bag in case if we got update
+                    // from the user/org settings in order for us to be able to close provider observables.
+                    previousSubscriptions.add(insightPageProvider)
+                    previousSubscriptions.add(directoryPageProvider)
+                    previousSubscriptions.add(homePageProvider)
+                }
+            })
     )
+}
+
+interface InsightSeriesData {
+    date: number
+    [seriesName: string]: number
+}
+
+interface RepoCommit {
+    date: Date
+    commit: string
+    repo: string
 }
 
 async function getInsightContent(
@@ -118,12 +137,31 @@ async function getInsightContent(
 
     const pathRegexp = path ? `^${escapeRegExp(path)}/` : undefined
 
+    // -------- Initialize data ---------
+    const data: InsightSeriesData[] = []
+
+    for (const date of dates) {
+        const dataIndex = dates.indexOf(date)
+
+        // Initialize data series object by all dates.
+        data[dataIndex] = {
+            date: date.getTime(),
+            // Initialize all series to 0
+            ...Object.fromEntries(insight.series.map(series => [series.name, EMPTY_DATA_POINT_VALUE])),
+        }
+    }
+
     // Get commits to search for each day
     const repoCommits = (
         await Promise.all(
             repos.map(async repo => (await determineCommitsToSearch(dates, repo)).map(commit => ({ repo, ...commit })))
         )
-    ).flat()
+    )
+        .flat()
+        // For commit which we can't find we should not run search API request
+        // instead of it we will use just EMPTY_DATA_POINT_VALUE
+        .filter(commitData => commitData.commit !== null) as RepoCommit[]
+
     const searchQueries = insight.series.flatMap(({ query, name }) =>
         repoCommits.map(({ date, repo, commit }) => ({
             name,
@@ -158,29 +196,29 @@ async function getInsightContent(
         // The bulk search may timeout, but a retry is then likely faster because caches are warm
         .pipe(retry(3))
         .toPromise()
+
     const searchResults = Object.entries(rawSearchResults).map(([field, result]) => {
         const index = +field.slice('search'.length)
         const query = searchQueries[index]
         return { ...query, result }
     })
 
-    const data: {
-        date: number
-        [seriesName: string]: number
-    }[] = []
+    // Merge initial data and search API data
     for (const { name, date, result } of searchResults) {
         const dataKey = name
         const dataIndex = dates.indexOf(date)
-        const obj =
-            data[dataIndex] ??
-            (data[dataIndex] = {
-                date: date.getTime(),
-                // Initialize all series to 0
-                ...Object.fromEntries(insight.series.map(series => [series.name, 0])),
-            })
-        // Sum across repos
-        const countForRepo = result.results.matchCount
-        obj[dataKey] += countForRepo
+        const object = data[dataIndex]
+
+        const countForRepo = result?.results.matchCount
+
+        // If we got some data that means for this data points we got
+        // a valid commit in a git history therefore we need write some data
+        // to this series.
+        if (object[dataKey] === EMPTY_DATA_POINT_VALUE) {
+            object[dataKey] = countForRepo ?? 0
+        } else {
+            object[dataKey] += countForRepo ?? 0
+        }
     }
 
     return {
@@ -228,7 +266,12 @@ function getDaysToQuery(step: globalThis.Duration): Date[] {
     return dates
 }
 
-async function determineCommitsToSearch(dates: Date[], repo: string): Promise<{ date: Date; commit: string }[]> {
+interface SearchCommit {
+    date: Date
+    commit: string | null
+}
+
+async function determineCommitsToSearch(dates: Date[], repo: string): Promise<SearchCommit[]> {
     const commitQueries = dates.map(date => {
         const before = formatISO(date)
         return `repo:^${escapeRegExp(repo)}$ type:commit before:${before} count:1`
@@ -263,18 +306,22 @@ async function determineCommitsToSearch(dates: Date[], repo: string): Promise<{ 
     )
     const commitOids = Object.entries(commitResults).map(([name, search], index) => {
         const i = +name.slice('search'.length)
+        const date = dates[i]
+
         if (i !== index) {
             throw new Error(`Expected field ${name} to be at index ${i} of object keys`)
         }
 
         if (search.results.results.length === 0) {
-            throw new Error(`No result for ${commitQueries[i]}`)
+            console.warn(`No result for ${commitQueries[i]}`)
+
+            return { commit: null, date }
         }
         const commit = (search.results.results[0] as ICommitSearchResult).commit
 
         // Sanity check
         const commitDate = commit.committer && new Date(commit.committer.date)
-        const date = dates[i]
+
         if (!commitDate) {
             throw new Error(`Expected commit to have committer: \`${commit.oid}\``)
         }
