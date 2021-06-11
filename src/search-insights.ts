@@ -93,7 +93,10 @@ export function activate(context: sourcegraph.ExtensionContext): void {
 
                     const directoryPageProvider = sourcegraph.app.registerViewProvider(`${id}.directory`, {
                         where: 'directory',
-                        provideView,
+                        provideView: async ({ viewer }) => {
+                            const { repo, path } = resolveDocumentURI(viewer.directory.uri)
+                            return getInsightContent([repo], path, insight)
+                        },
                     })
 
                     const homePageProvider = sourcegraph.app.registerViewProvider(`${id}.homepage`, {
