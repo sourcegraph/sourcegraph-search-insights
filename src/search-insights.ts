@@ -7,6 +7,7 @@ import { from, defer, Subscription } from 'rxjs'
 import { map, distinctUntilChanged, mergeAll, startWith, retry, tap } from 'rxjs/operators'
 import isEqual from 'lodash/isEqual'
 import escapeRegExp from 'lodash/escapeRegExp'
+import { queryHasCountFilter } from './query-has-count-filter'
 
 const queryGraphQL = async <T = IQuery>(query: string, variables: object = {}): Promise<T> => {
     const { data, errors }: IGraphQLResponseRoot = await sourcegraph.commands.executeCommand(
@@ -171,7 +172,11 @@ async function getInsightContent(
             date,
             repo,
             commit,
-            query: [`repo:^${escapeRegExp(repo)}$@${commit}`, pathRegexp && ` file:${pathRegexp}`, query, 'count:99999']
+            query: [
+                `repo:^${escapeRegExp(repo)}$@${commit}`,
+                pathRegexp && ` file:${pathRegexp}`,
+                getQueryWithCountFilter(query),
+            ]
                 .filter(Boolean)
                 .join(' '),
         }))
@@ -340,4 +345,8 @@ async function determineCommitsToSearch(dates: Date[], repo: string): Promise<Se
     })
 
     return commitOids
+}
+
+function getQueryWithCountFilter(query: string): string {
+    return queryHasCountFilter(query) ? query : `${query} count:99999`
 }
